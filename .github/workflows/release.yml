@@ -1,0 +1,190 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: 386
+          - goos: linux
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: 386
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.23.4'
+        
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+        
+    - name: Download dependencies
+      run: go mod download
+      
+    - name: Verify dependencies
+      run: go mod tidy
+      
+    - name: Build binary for ${{ matrix.goos }}/${{ matrix.goarch }}
+      env:
+        GOOS: ${{ matrix.goos }}
+        GOARCH: ${{ matrix.goarch }}
+      run: |
+        echo "Building for $GOOS/$GOARCH"
+        if [ "$GOOS" = "windows" ]; then
+          BINARY_NAME="universal-cleaner-$GOOS-$GOARCH.exe"
+        else
+          BINARY_NAME="universal-cleaner-$GOOS-$GOARCH"
+        fi
+        echo "BINARY_NAME=$BINARY_NAME" >> $GITHUB_ENV
+        go build -v -ldflags="-s -w" -o "$BINARY_NAME" .
+        
+    - name: Create dist directory and organize binary
+      run: |
+        mkdir -p dist
+        mv "${{ env.BINARY_NAME }}" dist/
+        ls -la dist/
+        
+    - name: Generate SHA256 checksum
+      run: |
+        cd dist
+        sha256sum "${{ env.BINARY_NAME }}" > "${{ env.BINARY_NAME }}.sha256"
+        echo "Generated checksum:"
+        cat "${{ env.BINARY_NAME }}.sha256"
+        
+    - name: Verify checksum
+      run: |
+        cd dist
+        sha256sum -c "${{ env.BINARY_NAME }}.sha256"
+        echo "Checksum verification successful"
+        
+    - name: Upload binary artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: binary-${{ matrix.goos }}-${{ matrix.goarch }}
+        path: |
+          dist/${{ env.BINARY_NAME }}
+          dist/${{ env.BINARY_NAME }}.sha256
+        retention-days: 30
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Fetch full history for release notes
+        
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+        
+    - name: Organize binaries and create consolidated checksums
+      run: |
+        mkdir -p dist
+        echo "SHA256 checksums for Universal Cleaner binaries:" > dist/checksums.txt
+        echo "" >> dist/checksums.txt
+        
+        # Move all binaries to dist and collect checksums
+        for artifact_dir in artifacts/binary-*; do
+          if [ -d "$artifact_dir" ]; then
+            echo "Processing $artifact_dir"
+            cp "$artifact_dir"/* dist/
+          fi
+        done
+        
+        # Create consolidated checksums file
+        cd dist
+        for file in universal-cleaner-*; do
+          if [[ "$file" != *.sha256 ]]; then
+            checksum=$(sha256sum "$file" | cut -d' ' -f1)
+            echo "$checksum $file" >> checksums.txt
+          fi
+        done
+        
+        echo "Generated consolidated checksums:"
+        cat checksums.txt
+        ls -la
+        
+    - name: Generate release notes
+      id: release_notes
+      run: |
+        # Get the previous tag for comparison
+        PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+        CURRENT_TAG=${GITHUB_REF#refs/tags/}
+        
+        echo "Current tag: $CURRENT_TAG"
+        echo "Previous tag: $PREVIOUS_TAG"
+        
+        # Generate release notes
+        if [ -n "$PREVIOUS_TAG" ]; then
+          echo "## Changes since $PREVIOUS_TAG" > release_notes.md
+          echo "" >> release_notes.md
+          git log --pretty=format:"- %s (%h)" "$PREVIOUS_TAG..HEAD" >> release_notes.md
+        else
+          echo "## Initial Release" > release_notes.md
+          echo "" >> release_notes.md
+          echo "First release of Universal Cleaner with cross-platform support." >> release_notes.md
+        fi
+        
+        echo "" >> release_notes.md
+        echo "## Supported Platforms" >> release_notes.md
+        echo "" >> release_notes.md
+        echo "- Linux (amd64, 386, arm64)" >> release_notes.md
+        echo "- Windows (amd64, 386)" >> release_notes.md
+        echo "- macOS (amd64, arm64)" >> release_notes.md
+        echo "" >> release_notes.md
+        echo "## Installation" >> release_notes.md
+        echo "" >> release_notes.md
+        echo "1. Download the appropriate binary for your platform" >> release_notes.md
+        echo "2. Verify the checksum using the provided checksums.txt file" >> release_notes.md
+        echo "3. Make the binary executable (Unix-like systems): \`chmod +x universal-cleaner-*\`" >> release_notes.md
+        echo "4. Run the application: \`./universal-cleaner-*\` or double-click on Windows" >> release_notes.md
+        
+        echo "Generated release notes:"
+        cat release_notes.md
+        
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        name: Universal Cleaner ${{ github.ref_name }}
+        body_path: release_notes.md
+        draft: false
+        prerelease: false
+        files: |
+          dist/universal-cleaner-*
+          dist/checksums.txt
+        fail_on_unmatched_files: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
