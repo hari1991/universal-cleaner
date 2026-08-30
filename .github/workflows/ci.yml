@@ -8,80 +8,109 @@ on:
 
 jobs:
   ci:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runs_on }}
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - goos: linux
-            goarch: amd64
-          - goos: linux
-            goarch: 386
-          - goos: linux
-            goarch: arm64
-          - goos: windows
-            goarch: amd64
-          - goos: windows
-            goarch: 386
-          - goos: darwin
-            goarch: amd64
-          - goos: darwin
-            goarch: arm64
-    
+          # Linux: native runner, install graphics deps via apt
+          - { runs_on: ubuntu-latest, goos: linux,   goarch: amd64, cc: gcc,                    label: linux-amd64 }
+          - { runs_on: ubuntu-latest, goos: linux,   goarch: 386,   cc: "gcc -m32",              label: linux-386 }
+          - { runs_on: ubuntu-latest, goos: linux,   goarch: arm64, cc: aarch64-linux-gnu-gcc,   label: linux-arm64 }
+          # Windows: native runner, mingw provides OpenGL/GLFW toolchain
+          - { runs_on: windows-latest, goos: windows, goarch: amd64, cc: gcc,                   label: windows-amd64 }
+          - { runs_on: windows-latest, goos: windows, goarch: 386,   cc: i686-w64-mingw32-gcc,   label: windows-386 }
+          # macOS: native runner, OpenGL framework + Cocoa built in
+          - { runs_on: macos-latest,   goos: darwin,  goarch: amd64, cc: clang,                  label: darwin-amd64 }
+          - { runs_on: macos-latest,   goos: darwin,  goarch: arm64, cc: clang,                  label: darwin-arm64 }
+
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
-      
+      uses: actions/checkout@v5
+
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
         go-version: '1.23.4'
-        
-    - name: Cache Go modules
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cache/go-build
-          ~/go/pkg/mod
-        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        restore-keys: |
-          ${{ runner.os }}-go-
-        
+        cache: true
+
+    - name: Install graphics deps (Linux native amd64)
+      if: runner.os == 'Linux' && matrix.goarch == 'amd64'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libgl1-mesa-dev libglfw3-dev xorg-dev
+
+    - name: Install graphics deps (Linux 386 cross)
+      if: runner.os == 'Linux' && matrix.goarch == '386'
+      run: |
+        sudo dpkg --add-architecture i386
+        sudo apt-get update
+        sudo apt-get install -y \
+          gcc-multilib g++-multilib \
+          libgl1-mesa-dev:i386 libglfw3-dev:i386 \
+          libx11-dev:i386 libxrandr-dev:i386 libxi-dev:i386 \
+          libxxf86vm-dev:i386 libxcursor-dev:i386 libxinerama-dev:i386
+
+    - name: Install graphics deps (Linux arm64 cross)
+      if: runner.os == 'Linux' && matrix.goarch == 'arm64'
+      run: |
+        sudo dpkg --add-architecture arm64
+        sudo apt-get update
+        sudo apt-get install -y \
+          gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+          libgl1-mesa-dev:arm64 libglfw3-dev:arm64 \
+          libx11-dev:arm64 libxrandr-dev:arm64 libxi-dev:arm64 \
+          libxxf86vm-dev:arm64 libxcursor-dev:arm64 libxinerama-dev:arm64
+
+    - name: Install mingw toolchain (Windows 386 cross)
+      if: runner.os == 'Windows' && matrix.goarch == '386'
+      shell: bash
+      run: |
+        # msys2 is preinstalled on windows-latest; add the 32-bit mingw gcc
+        /c/msys64/usr/bin/pacman.exe -S --noconfirm mingw-w64-i686-gcc || true
+        echo "C:\msys64\mingw32\bin" >> "$GITHUB_PATH"
+
+    - name: Ensure mingw64 in PATH (Windows amd64)
+      if: runner.os == 'Windows' && matrix.goarch == 'amd64'
+      shell: bash
+      run: echo "C:\msys64\mingw64\bin" >> "$GITHUB_PATH"
+
     - name: Download dependencies
       run: go mod download
-      
+
     - name: Verify dependencies
       run: go mod tidy && git diff --exit-code go.mod go.sum
-      
+
     - name: Check code formatting
+      shell: bash
       run: |
         if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
           echo "The following files are not formatted:"
           gofmt -s -l .
           exit 1
         fi
-        
-    - name: Run tests
-      run: go test -v -race -coverprofile=coverage.out ./...
-      
+
+    - name: Run tests (pure-Go core)
+      run: go test -v -race -coverprofile=coverage.out ./internal/core/...
+
     - name: Upload test results
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: test-results-${{ matrix.goos }}-${{ matrix.goarch }}
+        name: test-results-${{ matrix.label }}
         path: coverage.out
-      
+        if-no-files-found: ignore
+
     - name: Build for ${{ matrix.goos }}/${{ matrix.goarch }}
+      shell: bash
       env:
         GOOS: ${{ matrix.goos }}
         GOARCH: ${{ matrix.goarch }}
+        CGO_ENABLED: 1
+        CC: ${{ matrix.cc }}
       run: |
-        echo "Building for $GOOS/$GOARCH"
-        go build -v -o /tmp/universal-cleaner${{ matrix.goos == 'windows' && '.exe' || '' }} .
-        
-    - name: Verify build output
-      run: |
-        if [ "${{ matrix.goos }}" = "windows" ]; then
-          ls -la /tmp/universal-cleaner.exe
-        else
-          ls -la /tmp/universal-cleaner
-        fi
+        echo "Building for $GOOS/$GOARCH with CC=$CC"
+        OUT="${{ runner.temp }}/universal-cleaner"
+        if [ "$GOOS" = "windows" ]; then OUT="$OUT.exe"; fi
+        go build -v -o "$OUT" .
+        ls -la "$OUT"
