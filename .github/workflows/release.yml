@@ -53,7 +53,9 @@ jobs:
           echo "Release version: $APP_VERSION (from VERSION='$RAW')"
 
       - name: Install fyne CLI
-        run: go install fyne.io/fyne/v2/cmd/fyne@latest
+        # Pin to the same version as the project's fyne library (go.mod) to
+        # avoid CLI/library incompatibilities.
+        run: go install fyne.io/fyne/v2/cmd/fyne@v2.6.2
 
       - name: Cache Go modules
         uses: actions/cache@v4
@@ -73,7 +75,7 @@ jobs:
           CC: ${{ matrix.cc }}
         run: go build -ldflags="-s -w" -o universal-cleaner .
 
-      - name: Package macOS .app + .dmg
+      - name: Package macOS .app
         env:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 1
@@ -81,21 +83,38 @@ jobs:
         run: |
           fyne package -os darwin -icon Icon.png -name "UniversalCleaner" \
             -appVersion "${{ env.APP_VERSION }}" -appID "com.universalcleaner.app"
+          # Debug: show what fyne package produced
+          echo "--- Files after fyne package ---"
+          ls -la
+          find . -maxdepth 2 -name "UniversalCleaner*" -print
 
-      - name: Rename output for arch
+      - name: Organize artifacts (.app zip + .dmg)
         run: |
+          set -e
           mkdir -p dist
-          if [ -f "UniversalCleaner.app" ]; then
-            zip -r "dist/UniversalCleaner-macos-${{ matrix.suffix }}.app.zip" "UniversalCleaner.app"
-          fi
-          if [ -f "UniversalCleaner.dmg" ]; then
-            mv "UniversalCleaner.dmg" "dist/UniversalCleaner-macos-${{ matrix.suffix }}.dmg"
+          # fyne package -os darwin creates UniversalCleaner.app (not .dmg).
+          # We zip the .app and also create a .dmg with hdiutil.
+          if [ -d "UniversalCleaner.app" ]; then
+            # Zip the .app bundle
+            ditto -c -k --keepParent "UniversalCleaner.app" \
+              "dist/UniversalCleaner-macos-${{ matrix.suffix }}.app.zip"
+            # Create a .dmg disk image
+            hdiutil create -volname "UniversalCleaner" \
+              -srcfolder "UniversalCleaner.app" \
+              -ov -format UDZO \
+              "dist/UniversalCleaner-macos-${{ matrix.suffix }}.dmg"
+          else
+            echo "::error::UniversalCleaner.app was not created by fyne package"
+            exit 1
           fi
 
       - name: Generate SHA256 checksum
+        shell: bash
         run: |
           cd dist
+          shopt -s nullglob
           for f in *; do
+            [ "$f" = "*.sha256" ] && continue
             shasum -a 256 "$f" > "$f.sha256"
           done
 
@@ -106,7 +125,7 @@ jobs:
           path: dist/
 
   # ─────────────────────────────────────────────────────────────────────────
-  # Windows: .msi installer (native, on Windows runner)
+  # Windows: .exe + .msi installer (native, on Windows runner)
   # ─────────────────────────────────────────────────────────────────────────
   package-windows:
     runs-on: windows-latest
@@ -145,7 +164,7 @@ jobs:
           echo "Release version: $APP_VERSION (from VERSION='$RAW')"
 
       - name: Install fyne CLI
-        run: go install fyne.io/fyne/v2/cmd/fyne@latest
+        run: go install fyne.io/fyne/v2/cmd/fyne@v2.6.2
 
       - name: Install mingw toolchain (Windows 386 cross)
         if: matrix.goarch == '386'
@@ -159,6 +178,17 @@ jobs:
         if: matrix.goarch == 'amd64'
         shell: bash
         run: echo "C:\msys64\mingw64\bin" >> "$GITHUB_PATH"
+
+      - name: Add WiX Toolset to PATH (for .msi packaging)
+        shell: bash
+        run: |
+          WIX_BIN="C:\Program Files (x86)\WiX Toolset v3.14\bin"
+          if [ -d "$WIX_BIN" ]; then
+            echo "$WIX_BIN" >> "$GITHUB_PATH"
+            echo "WiX added to PATH"
+          else
+            echo "::warning::WiX Toolset not found at $WIX_BIN; .msi will not be produced"
+          fi
 
       - name: Cache Go modules
         uses: actions/cache@v4
@@ -179,7 +209,7 @@ jobs:
           CC: ${{ matrix.cc }}
         run: go build -ldflags="-s -w" -o universal-cleaner.exe .
 
-      - name: Package Windows .msi
+      - name: Package Windows .exe + .msi
         shell: bash
         env:
           GOARCH: ${{ matrix.goarch }}
@@ -188,17 +218,34 @@ jobs:
         run: |
           fyne package -os windows -icon Icon.png -name "UniversalCleaner" \
             -appVersion "${{ env.APP_VERSION }}" -appID "com.universalcleaner.app"
+          # Debug: show what fyne package produced
+          echo "--- Files after fyne package ---"
+          ls -la
 
       - name: Organize artifacts
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist
+          # fyne package -os windows creates UniversalCleaner.exe (with icon).
+          # If WiX is available it also creates UniversalCleaner.msi.
+          $found = $false
           if (Test-Path "UniversalCleaner.msi") {
             Move-Item "UniversalCleaner.msi" "dist/UniversalCleaner-windows-${{ matrix.suffix }}.msi"
+            $found = $true
           }
-          if (Test-Path "universal-cleaner.exe") {
+          if (Test-Path "UniversalCleaner.exe") {
+            Move-Item "UniversalCleaner.exe" "dist/UniversalCleaner-windows-${{ matrix.suffix }}.exe"
+            $found = $true
+          }
+          # Fallback: the raw binary from the build step (lowercase name)
+          if (-not $found -and (Test-Path "universal-cleaner.exe")) {
             Move-Item "universal-cleaner.exe" "dist/UniversalCleaner-windows-${{ matrix.suffix }}.exe"
+            $found = $true
           }
+          if (-not $found) {
+            Write-Error "No Windows artifacts were produced by fyne package or go build"
+            exit 1
+          fi
 
       - name: Generate SHA256 checksum
         shell: pwsh
@@ -287,7 +334,7 @@ jobs:
             libxxf86vm-dev:arm64 libxcursor-dev:arm64 libxinerama-dev:arm64
 
       - name: Install fyne CLI
-        run: go install fyne.io/fyne/v2/cmd/fyne@latest
+        run: go install fyne.io/fyne/v2/cmd/fyne@v2.6.2
 
       - name: Cache Go modules
         uses: actions/cache@v4
@@ -317,25 +364,39 @@ jobs:
         run: |
           fyne package -os linux -icon Icon.png -name "universal-cleaner" \
             -appVersion "${{ env.APP_VERSION }}" -appID "com.universalcleaner.app"
+          # Debug: show what fyne package produced
+          echo "--- Files after fyne package ---"
+          ls -la
 
       - name: Organize artifacts
         run: |
+          set -e
           mkdir -p dist
+          found=false
           for f in *.tar.xz *.deb; do
             if [ -f "$f" ]; then
-              base="${f%.*}"
               ext="${f##*.}"
               mv "$f" "dist/universal-cleaner-linux-${{ matrix.suffix }}.$ext"
+              found=true
             fi
           done
           # Also include the raw binary
-          cp universal-cleaner "dist/universal-cleaner-linux-${{ matrix.suffix }}" 2>/dev/null || true
+          if [ -f "universal-cleaner" ]; then
+            cp "universal-cleaner" "dist/universal-cleaner-linux-${{ matrix.suffix }}"
+            found=true
+          fi
+          if [ "$found" = false ]; then
+            echo "::error::No Linux artifacts were produced"
+            exit 1
+          fi
 
       - name: Generate SHA256 checksum
+        shell: bash
         run: |
           cd dist
+          shopt -s nullglob
           for f in *; do
-            [ "$f" = "*.sha256" ] && continue
+            case "$f" in *.sha256) continue;; esac
             sha256sum "$f" > "$f.sha256"
           done
 
@@ -386,8 +447,10 @@ jobs:
           cd dist
           echo "SHA256 checksums for Universal Cleaner ${{ env.APP_VERSION }}" > checksums.txt
           echo "" >> checksums.txt
-          for f in *.dmg *.msi *.tar.xz *.deb *.app.zip; do
-            [ -f "$f" ] && sha256sum "$f" >> checksums.txt
+          shopt -s nullglob
+          for f in *.dmg *.msi *.exe *.tar.xz *.deb *.app.zip; do
+            case "$f" in *.sha256) continue;; esac
+            sha256sum "$f" >> checksums.txt
           done
           echo "" >> checksums.txt
           cat checksums.txt
@@ -417,8 +480,8 @@ jobs:
             echo "|----------|------|"
             echo "| macOS (Apple Silicon) | \`UniversalCleaner-macos-arm64.dmg\` |"
             echo "| macOS (Intel) | \`UniversalCleaner-macos-x86_64.dmg\` |"
-            echo "| Windows (64-bit) | \`UniversalCleaner-windows-x86_64.msi\` |"
-            echo "| Windows (32-bit) | \`UniversalCleaner-windows-x86.msi\` |"
+            echo "| Windows (64-bit) | \`UniversalCleaner-windows-x86_64.msi\` or \`.exe\` |"
+            echo "| Windows (32-bit) | \`UniversalCleaner-windows-x86.msi\` or \`.exe\` |"
             echo "| Linux (64-bit) | \`universal-cleaner-linux-x86_64.tar.xz\` or \`.deb\` |"
             echo "| Linux (ARM64) | \`universal-cleaner-linux-arm64.tar.xz\` or \`.deb\` |"
             echo ""
@@ -430,7 +493,7 @@ jobs:
             echo "3. On first launch, right-click → **Open** to bypass Gatekeeper"
             echo ""
             echo "### Windows"
-            echo "1. Download the \`.msi\` installer"
+            echo "1. Download the \`.msi\` installer (or \`.exe\` portable)"
             echo "2. Double-click to install"
             echo "3. Launch from the Start Menu"
             echo ""
@@ -456,6 +519,7 @@ jobs:
           files: |
             dist/*.dmg
             dist/*.msi
+            dist/*.exe
             dist/*.tar.xz
             dist/*.deb
             dist/*.app.zip
