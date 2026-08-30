@@ -107,6 +107,7 @@ jobs:
         fi
 
     - name: Run tests (pure-Go core)
+      shell: bash
       run: go test -v -race -coverprofile=coverage.out ./internal/core/...
 
     - name: Upload test results
