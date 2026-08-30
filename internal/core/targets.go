@@ -2,8 +2,8 @@ package core
 
 // Target describes a single cleanable filesystem entry.
 type Target struct {
-	Name     string   // exact name or wildcard (e.g. "*.pyc")
-	IsDir    bool     // whether this target is expected to be a directory
+	Name      string   // exact name or wildcard (e.g. "*.pyc")
+	IsDir     bool     // whether this target is expected to be a directory
 	HintFiles []string // if set, only match when one of these files exists in an ancestor
 }
 

@@ -47,17 +47,17 @@ type UniversalCleaner struct {
 	searchEntry  *widget.Entry
 	table        *widget.Table
 
-	progressBar       *widget.ProgressBar
+	progressBar         *widget.ProgressBar
 	progressBarInfinite *widget.ProgressBarInfinite
-	progressLbl       *widget.Label
-	statusLabel *widget.Label
-	totalLabel  *widget.Label
-	logList     *widget.List
-	emptyLabel  *widget.Label
-	themeBtn    *widget.Button
-	recentSel   *widget.Select
-	exportBtn   *widget.Button
-	logFile     *os.File
+	progressLbl         *widget.Label
+	statusLabel         *widget.Label
+	totalLabel          *widget.Label
+	logList             *widget.List
+	emptyLabel          *widget.Label
+	themeBtn            *widget.Button
+	recentSel           *widget.Select
+	exportBtn           *widget.Button
+	logFile             *os.File
 
 	logLines []string
 
@@ -876,8 +876,8 @@ type keyboardShortcut struct {
 	mod fyne.KeyModifier
 }
 
-func (s keyboardShortcut) ShortcutName() string { return string(s.key) }
-func (s keyboardShortcut) Key() fyne.KeyName    { return s.key }
+func (s keyboardShortcut) ShortcutName() string  { return string(s.key) }
+func (s keyboardShortcut) Key() fyne.KeyName     { return s.key }
 func (s keyboardShortcut) Mod() fyne.KeyModifier { return s.mod }
 
 func (uc *UniversalCleaner) bindShortcuts() {

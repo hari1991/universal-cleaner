@@ -9,7 +9,7 @@ type CleanableItem struct {
 	Type         string
 	Size         int64
 	SizeStr      string
-	FileCount    int   // number of files in this item (1 for files, >1 for dirs)
+	FileCount    int // number of files in this item (1 for files, >1 for dirs)
 	LastModified time.Time
 	IsDir        bool
 	Risky        bool
@@ -54,13 +54,13 @@ type ScanOptions struct {
 
 // Settings is the persisted user configuration.
 type Settings struct {
-	EnabledTypes   map[string]bool `json:"enabled_types"`
-	ExcludedNames  []string        `json:"excluded_names"`
-	IncludeRisky   bool            `json:"include_risky"`
-	UseTrash       bool            `json:"use_trash"`
-	DarkTheme      bool            `json:"dark_theme"`
-	Accent         string          `json:"accent"`
-	RecentFolders  []string        `json:"recent_folders"`
-	WindowWidth    int             `json:"window_width"`
-	WindowHeight   int             `json:"window_height"`
+	EnabledTypes  map[string]bool `json:"enabled_types"`
+	ExcludedNames []string        `json:"excluded_names"`
+	IncludeRisky  bool            `json:"include_risky"`
+	UseTrash      bool            `json:"use_trash"`
+	DarkTheme     bool            `json:"dark_theme"`
+	Accent        string          `json:"accent"`
+	RecentFolders []string        `json:"recent_folders"`
+	WindowWidth   int             `json:"window_width"`
+	WindowHeight  int             `json:"window_height"`
 }
