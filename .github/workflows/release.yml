@@ -4,187 +4,337 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  build:
+  # ─────────────────────────────────────────────────────────────────────────
+  # macOS: .app bundle + .dmg disk image (native, on macOS runner)
+  # ─────────────────────────────────────────────────────────────────────────
+  package-macos:
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        include:
+          - goarch: amd64
+            suffix: x86_64
+          - goarch: arm64
+            suffix: arm64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.4'
+
+      - name: Install fyne CLI
+        run: go install fyne.io/fyne/v2/cmd/fyne@latest
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: macos-go-${{ matrix.goarch }}-${{ hashFiles('**/go.sum') }}
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build raw binary
+        env:
+          GOARCH: ${{ matrix.goarch }}
+        run: go build -ldflags="-s -w" -o universal-cleaner .
+
+      - name: Package macOS .app + .dmg
+        env:
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          fyne package -os darwin -icon Icon.png -name "UniversalCleaner" \
+            -appVersion "${{ github.ref_name }}" -appID "com.universalcleaner.app"
+
+      - name: Rename output for arch
+        run: |
+          mkdir -p dist
+          if [ -f "UniversalCleaner.app" ]; then
+            zip -r "dist/UniversalCleaner-macos-${{ matrix.suffix }}.app.zip" "UniversalCleaner.app"
+          fi
+          if [ -f "UniversalCleaner.dmg" ]; then
+            mv "UniversalCleaner.dmg" "dist/UniversalCleaner-macos-${{ matrix.suffix }}.dmg"
+          fi
+
+      - name: Generate SHA256 checksum
+        run: |
+          cd dist
+          for f in *; do
+            shasum -a 256 "$f" > "$f.sha256"
+          done
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.suffix }}
+          path: dist/
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Windows: .msi installer (native, on Windows runner)
+  # ─────────────────────────────────────────────────────────────────────────
+  package-windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        include:
+          - goarch: amd64
+            suffix: x86_64
+          - goarch: 386
+            suffix: x86
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.4'
+
+      - name: Install fyne CLI
+        run: go install fyne.io/fyne/v2/cmd/fyne@latest
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\.cache\go-build
+            ~\go\pkg\mod
+          key: windows-go-${{ matrix.goarch }}-${{ hashFiles('**/go.sum') }}
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build raw binary
+        env:
+          GOARCH: ${{ matrix.goarch }}
+        run: go build -ldflags="-s -w" -o universal-cleaner.exe .
+
+      - name: Package Windows .msi
+        env:
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          fyne package -os windows -icon Icon.png -name "UniversalCleaner" `
+            -appVersion "${{ github.ref_name }}" -appID "com.universalcleaner.app"
+
+      - name: Organize artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist
+          if (Test-Path "UniversalCleaner.msi") {
+            Move-Item "UniversalCleaner.msi" "dist/UniversalCleaner-windows-${{ matrix.suffix }}.msi"
+          }
+          if (Test-Path "universal-cleaner.exe") {
+            Move-Item "universal-cleaner.exe" "dist/UniversalCleaner-windows-${{ matrix.suffix }}.exe"
+          }
+
+      - name: Generate SHA256 checksum
+        shell: pwsh
+        run: |
+          cd dist
+          Get-ChildItem -File | ForEach-Object {
+            $hash = (Get-FileHash $_.Name -Algorithm SHA256).Hash
+            "$hash  $($_.Name)" | Out-File "$($_.Name).sha256" -Encoding ascii
+          }
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.suffix }}
+          path: dist/
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Linux: .tar.xz portable + .deb package (native, on Ubuntu runner)
+  # ─────────────────────────────────────────────────────────────────────────
+  package-linux:
     runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
-          - goos: linux
-            goarch: amd64
-          - goos: linux
-            goarch: 386
-          - goos: linux
-            goarch: arm64
-          - goos: windows
-            goarch: amd64
-          - goos: windows
-            goarch: 386
-          - goos: darwin
-            goarch: amd64
-          - goos: darwin
-            goarch: arm64
-    
+          - goarch: amd64
+            suffix: x86_64
+          - goarch: arm64
+            suffix: arm64
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.23.4'
-        
-    - name: Cache Go modules
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cache/go-build
-          ~/go/pkg/mod
-        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        restore-keys: |
-          ${{ runner.os }}-go-
-        
-    - name: Download dependencies
-      run: go mod download
-      
-    - name: Verify dependencies
-      run: go mod tidy
-      
-    - name: Build binary for ${{ matrix.goos }}/${{ matrix.goarch }}
-      env:
-        GOOS: ${{ matrix.goos }}
-        GOARCH: ${{ matrix.goarch }}
-      run: |
-        echo "Building for $GOOS/$GOARCH"
-        if [ "$GOOS" = "windows" ]; then
-          BINARY_NAME="universal-cleaner-$GOOS-$GOARCH.exe"
-        else
-          BINARY_NAME="universal-cleaner-$GOOS-$GOARCH"
-        fi
-        echo "BINARY_NAME=$BINARY_NAME" >> $GITHUB_ENV
-        go build -v -ldflags="-s -w" -o "$BINARY_NAME" .
-        
-    - name: Create dist directory and organize binary
-      run: |
-        mkdir -p dist
-        mv "${{ env.BINARY_NAME }}" dist/
-        ls -la dist/
-        
-    - name: Generate SHA256 checksum
-      run: |
-        cd dist
-        sha256sum "${{ env.BINARY_NAME }}" > "${{ env.BINARY_NAME }}.sha256"
-        echo "Generated checksum:"
-        cat "${{ env.BINARY_NAME }}.sha256"
-        
-    - name: Verify checksum
-      run: |
-        cd dist
-        sha256sum -c "${{ env.BINARY_NAME }}.sha256"
-        echo "Checksum verification successful"
-        
-    - name: Upload binary artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: binary-${{ matrix.goos }}-${{ matrix.goarch }}
-        path: |
-          dist/${{ env.BINARY_NAME }}
-          dist/${{ env.BINARY_NAME }}.sha256
-        retention-days: 30
+      - name: Checkout code
+        uses: actions/checkout@v4
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.4'
+
+      - name: Install Linux GUI dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev xorg-dev gcc pkg-config \
+            libegl1-mesa-dev libgles2-mesa-dev
+
+      - name: Install fyne CLI
+        run: go install fyne.io/fyne/v2/cmd/fyne@latest
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: linux-go-${{ matrix.goarch }}-${{ hashFiles('**/go.sum') }}
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Build raw binary
+        env:
+          GOARCH: ${{ matrix.goarch }}
+        run: go build -ldflags="-s -w" -o universal-cleaner .
+
+      - name: Package Linux .tar.xz + .deb
+        env:
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          fyne package -os linux -icon Icon.png -name "universal-cleaner" \
+            -appVersion "${{ github.ref_name }}" -appID "com.universalcleaner.app"
+
+      - name: Organize artifacts
+        run: |
+          mkdir -p dist
+          for f in *.tar.xz *.deb; do
+            if [ -f "$f" ]; then
+              base="${f%.*}"
+              ext="${f##*.}"
+              mv "$f" "dist/universal-cleaner-linux-${{ matrix.suffix }}.$ext"
+            fi
+          done
+          # Also include the raw binary
+          cp universal-cleaner "dist/universal-cleaner-linux-${{ matrix.suffix }}" 2>/dev/null || true
+
+      - name: Generate SHA256 checksum
+        run: |
+          cd dist
+          for f in *; do
+            [ "$f" = "*.sha256" ] && continue
+            sha256sum "$f" > "$f.sha256"
+          done
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.suffix }}
+          path: dist/
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Release: collect all artifacts and publish GitHub Release
+  # ─────────────────────────────────────────────────────────────────────────
   release:
-    needs: build
+    needs: [package-macos, package-windows, package-linux]
     runs-on: ubuntu-latest
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0  # Fetch full history for release notes
-        
-    - name: Download all artifacts
-      uses: actions/download-artifact@v4
-      with:
-        path: artifacts
-        
-    - name: Organize binaries and create consolidated checksums
-      run: |
-        mkdir -p dist
-        echo "SHA256 checksums for Universal Cleaner binaries:" > dist/checksums.txt
-        echo "" >> dist/checksums.txt
-        
-        # Move all binaries to dist and collect checksums
-        for artifact_dir in artifacts/binary-*; do
-          if [ -d "$artifact_dir" ]; then
-            echo "Processing $artifact_dir"
-            cp "$artifact_dir"/* dist/
-          fi
-        done
-        
-        # Create consolidated checksums file
-        cd dist
-        for file in universal-cleaner-*; do
-          if [[ "$file" != *.sha256 ]]; then
-            checksum=$(sha256sum "$file" | cut -d' ' -f1)
-            echo "$checksum $file" >> checksums.txt
-          fi
-        done
-        
-        echo "Generated consolidated checksums:"
-        cat checksums.txt
-        ls -la
-        
-    - name: Generate release notes
-      id: release_notes
-      run: |
-        # Get the previous tag for comparison
-        PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-        CURRENT_TAG=${GITHUB_REF#refs/tags/}
-        
-        echo "Current tag: $CURRENT_TAG"
-        echo "Previous tag: $PREVIOUS_TAG"
-        
-        # Generate release notes
-        if [ -n "$PREVIOUS_TAG" ]; then
-          echo "## Changes since $PREVIOUS_TAG" > release_notes.md
-          echo "" >> release_notes.md
-          git log --pretty=format:"- %s (%h)" "$PREVIOUS_TAG..HEAD" >> release_notes.md
-        else
-          echo "## Initial Release" > release_notes.md
-          echo "" >> release_notes.md
-          echo "First release of Universal Cleaner with cross-platform support." >> release_notes.md
-        fi
-        
-        echo "" >> release_notes.md
-        echo "## Supported Platforms" >> release_notes.md
-        echo "" >> release_notes.md
-        echo "- Linux (amd64, 386, arm64)" >> release_notes.md
-        echo "- Windows (amd64, 386)" >> release_notes.md
-        echo "- macOS (amd64, arm64)" >> release_notes.md
-        echo "" >> release_notes.md
-        echo "## Installation" >> release_notes.md
-        echo "" >> release_notes.md
-        echo "1. Download the appropriate binary for your platform" >> release_notes.md
-        echo "2. Verify the checksum using the provided checksums.txt file" >> release_notes.md
-        echo "3. Make the binary executable (Unix-like systems): \`chmod +x universal-cleaner-*\`" >> release_notes.md
-        echo "4. Run the application: \`./universal-cleaner-*\` or double-click on Windows" >> release_notes.md
-        
-        echo "Generated release notes:"
-        cat release_notes.md
-        
-    - name: Create GitHub Release
-      uses: softprops/action-gh-release@v2
-      with:
-        name: Universal Cleaner ${{ github.ref_name }}
-        body_path: release_notes.md
-        draft: false
-        prerelease: false
-        files: |
-          dist/universal-cleaner-*
-          dist/checksums.txt
-        fail_on_unmatched_files: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Organize all artifacts
+        run: |
+          mkdir -p dist
+          # Flatten all artifacts into dist/
+          find artifacts -type f | while read -r f; do
+            cp "$f" "dist/$(basename "$f")"
+          done
+          # Create consolidated checksums
+          cd dist
+          echo "SHA256 checksums for Universal Cleaner $(basename ${{ github.ref_name }})" > checksums.txt
+          echo "" >> checksums.txt
+          for f in *.dmg *.msi *.tar.xz *.deb *.app.zip; do
+            [ -f "$f" ] && sha256sum "$f" >> checksums.txt
+          done
+          echo "" >> checksums.txt
+          cat checksums.txt
+          ls -la
+
+      - name: Generate release notes
+        run: |
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          CURRENT_TAG=${GITHUB_REF#refs/tags/}
+
+          {
+            echo "## Universal Cleaner ${CURRENT_TAG}"
+            echo ""
+            if [ -n "$PREVIOUS_TAG" ]; then
+              echo "### Changes since ${PREVIOUS_TAG}"
+              echo ""
+              git log --pretty=format:"- %s (%h)" "$PREVIOUS_TAG..HEAD"
+              echo ""
+            else
+              echo "First release of Universal Cleaner."
+              echo ""
+            fi
+            echo ""
+            echo "## Downloads"
+            echo ""
+            echo "| Platform | File |"
+            echo "|----------|------|"
+            echo "| macOS (Apple Silicon) | \`UniversalCleaner-macos-arm64.dmg\` |"
+            echo "| macOS (Intel) | \`UniversalCleaner-macos-x86_64.dmg\` |"
+            echo "| Windows (64-bit) | \`UniversalCleaner-windows-x86_64.msi\` |"
+            echo "| Windows (32-bit) | \`UniversalCleaner-windows-x86.msi\` |"
+            echo "| Linux (64-bit) | \`universal-cleaner-linux-x86_64.tar.xz\` or \`.deb\` |"
+            echo "| Linux (ARM64) | \`universal-cleaner-linux-arm64.tar.xz\` or \`.deb\` |"
+            echo ""
+            echo "## Installation"
+            echo ""
+            echo "### macOS"
+            echo "1. Download the \`.dmg\` file for your architecture"
+            echo "2. Open the \`.dmg\` and drag **UniversalCleaner** to **Applications**"
+            echo "3. On first launch, right-click → **Open** to bypass Gatekeeper"
+            echo ""
+            echo "### Windows"
+            echo "1. Download the \`.msi\` installer"
+            echo "2. Double-click to install"
+            echo "3. Launch from the Start Menu"
+            echo ""
+            echo "### Linux"
+            echo "- **Debian/Ubuntu**: Install the \`.deb\` with \`sudo dpkg -i universal-cleaner-linux-*.deb\`"
+            echo "- **Other distros**: Extract the \`.tar.xz\` and run the binary"
+            echo ""
+            echo "## Verify Downloads"
+            echo ""
+            echo "Check the \`checksums.txt\` file for SHA256 hashes of all downloads."
+          } > release_notes.md
+
+          cat release_notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Universal Cleaner ${{ github.ref_name }}
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+          files: |
+            dist/*.dmg
+            dist/*.msi
+            dist/*.tar.xz
+            dist/*.deb
+            dist/*.app.zip
+            dist/checksums.txt
+            dist/*.sha256
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

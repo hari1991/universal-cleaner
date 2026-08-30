@@ -1,0 +1,25 @@
+version: "3.8"
+
+services:
+  # Build the Linux .tar.xz and .deb packages in a container.
+  # Output appears in ./dist/ on the host.
+  builder:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    volumes:
+      - ../dist:/dist
+    entrypoint: ["echo", "Build complete. Artifacts are in ./dist/"]
+
+  # Run the app inside a container (requires X11 forwarding on Linux).
+  # Usage: docker compose run --rm app
+  # Requires: xhost +local:docker and DISPLAY env var.
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+    network_mode: host

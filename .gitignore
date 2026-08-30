@@ -63,6 +63,10 @@ coverage.html
 *.pkg
 *.deb
 *.rpm
+*.dmg
+*.msi
+*.app.zip
+*.tar.xz
 
 # Development test directories (keep structure but ignore contents)
 test-cleanup/*/

@@ -1,213 +1,219 @@
 # Universal Cleaner
 
-[![CI](https://github.com/USERNAME/REPOSITORY/workflows/CI/badge.svg)](https://github.com/USERNAME/REPOSITORY/actions/workflows/ci.yml)
-[![Release](https://github.com/USERNAME/REPOSITORY/workflows/Release/badge.svg)](https://github.com/USERNAME/REPOSITORY/actions/workflows/release.yml)
-[![Go Version](https://img.shields.io/github/go-mod/go-version/USERNAME/REPOSITORY)](https://github.com/USERNAME/REPOSITORY/blob/main/go.mod)
-[![Latest Release](https://img.shields.io/github/v/release/USERNAME/REPOSITORY)](https://github.com/USERNAME/REPOSITORY/releases/latest)
+[![CI](https://github.com/hari1991/universal-cleaner/workflows/CI/badge.svg)](https://github.com/hari1991/universal-cleaner/actions/workflows/ci.yml)
+[![Release](https://github.com/hari1991/universal-cleaner/workflows/Release/badge.svg)](https://github.com/hari1991/universal-cleaner/actions/workflows/release.yml)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/hari1991/universal-cleaner)](https://github.com/hari1991/universal-cleaner/blob/main/go.mod)
+[![Latest Release](https://img.shields.io/github/v/release/hari1991/universal-cleaner)](https://github.com/hari1991/universal-cleaner/releases/latest)
 
 A cross-platform GUI application built in Go that helps you clean up build artifacts, dependencies, and temporary files from your development projects.
 
 ## Features
 
-- **Cross-platform**: Works on Windows, macOS, and Linux
+- **Cross-platform**: Works on Windows, macOS, and Linux with native installers
 - **GUI Interface**: Easy-to-use graphical interface built with Fyne
-- **Multiple Language Support**: Detects and cleans artifacts from various programming languages and tools:
+- **Disk Usage Display**: Shows total/used/free disk space for the selected volume
+- **Smart Scanning**: Project-aware heuristics reduce false positives (e.g. `target/` only matched when `Cargo.toml` exists nearby)
+- **Safe Deletion**: Move to Trash (recoverable) or permanent delete
+- **Parallel Size Calculation**: Fast scan with 8-worker pool for size computation
+- **Export Results**: Save scan results to CSV or JSON
+- **Recent Folders**: Quick access to previously scanned directories
+- **Drag & Drop**: Drag a folder onto the window to scan it
+- **Persistent Settings**: Categories, exclusions, theme, and window geometry saved across sessions
+- **Activity Log**: All actions logged to disk and displayed in the UI
+- **Multiple Language Support**:
   - **Node.js**: `node_modules`, `.npm`, `.yarn`, debug logs
-  - **Java**: `target`, `build`, `.gradle`, `.m2/repository`
+  - **Java**: `target`, `build`, `.gradle` (project-aware via `pom.xml`/`build.gradle`)
   - **Python**: `__pycache__`, `.pytest_cache`, `*.pyc`, virtual environments
-  - **Rust**: `target`, `Cargo.lock`
-  - **Go**: `vendor`, `bin`, `pkg`
-  - **C/C++**: `build`, cmake directories, object files
+  - **Rust**: `target` (project-aware via `Cargo.toml`)
+  - **Go**: `bin`, `pkg` (project-aware via `go.mod`)
+  - **C/C++**: cmake directories, object files
   - **Docker**: `.docker`, override files
   - **IDE**: `.vscode`, `.idea`, swap files, system files
   - **Build**: `dist`, `out`, `output`, cache directories
 
 ## Installation
 
-### Prerequisites
-- Go 1.19 or later
+### Download Pre-built Installers
 
-### Building from Source
+Go to the [Releases page](https://github.com/hari1991/universal-cleaner/releases/latest) and download the installer for your platform:
+
+| Platform | File | How to Install |
+|----------|------|----------------|
+| macOS (Apple Silicon) | `UniversalCleaner-macos-arm64.dmg` | Open `.dmg`, drag to Applications |
+| macOS (Intel) | `UniversalCleaner-macos-x86_64.dmg` | Open `.dmg`, drag to Applications |
+| Windows (64-bit) | `UniversalCleaner-windows-x86_64.msi` | Double-click `.msi` to install |
+| Windows (32-bit) | `UniversalCleaner-windows-x86.msi` | Double-click `.msi` to install |
+| Linux (64-bit) | `universal-cleaner-linux-x86_64.deb` | `sudo dpkg -i *.deb` |
+| Linux (64-bit) | `universal-cleaner-linux-x86_64.tar.xz` | Extract and run |
+| Linux (ARM64) | `universal-cleaner-linux-arm64.deb` | `sudo dpkg -i *.deb` |
+| Linux (ARM64) | `universal-cleaner-linux-arm64.tar.xz` | Extract and run |
+
+### Verify Download Integrity
+
+Each release includes SHA256 checksums:
 ```bash
-git clone <repository-url>
-cd universal-cleaner
-go mod download
-go build -o universal-cleaner
+sha256sum -c checksums.txt
 ```
 
-### Running
+### Build from Source
+
+**Prerequisites**: Go 1.23+ and platform build tools (see below)
+
 ```bash
+git clone https://github.com/hari1991/universal-cleaner.git
+cd universal-cleaner
+go build -o universal-cleaner
 ./universal-cleaner
+```
+
+Or use the startup script:
+```bash
+./startup.sh          # build + run GUI
+./startup.sh --cli    # run CLI mode
+./startup.sh --build  # build only
+```
+
+### Quick Start Script
+
+```bash
+# Build and launch the GUI
+./startup.sh
+
+# Build the CLI and scan current directory (dry run)
+./startup.sh --cli --path . --dry-run
+
+# Stop any running instance
+./stop.sh
+```
+
+## Packaging (Building Installers)
+
+The project uses [Fyne's packaging tool](https://docs.fyne.io/started/packaging) to create native installers.
+
+### Prerequisites by Platform
+
+| Platform | Requirements |
+|----------|-------------|
+| **macOS** | Xcode Command Line Tools, `fyne` CLI |
+| **Windows** | WiX Toolset 3.x, `fyne` CLI |
+| **Linux** | `libgl1-mesa-dev`, `xorg-dev`, `gcc`, `pkg-config`, `fyne` CLI |
+
+Install the fyne CLI:
+```bash
+go install fyne.io/fyne/v2/cmd/fyne@latest
+```
+
+### Package for Current Platform
+
+```bash
+make package          # auto-detect host OS
+```
+
+### Package for Specific Platform (on native OS)
+
+```bash
+make package-macos    # produces .app + .dmg (run on macOS)
+make package-windows  # produces .msi (run on Windows)
+make package-linux    # produces .tar.xz + .deb (run on Linux)
+```
+
+### Cross-compile Raw Binaries (no installer)
+
+```bash
+make build-all        # builds for all OS/arch combos into dist/
+```
+
+### Docker Build (Linux packages)
+
+```bash
+# Build .tar.xz and .deb in a container, output to ./dist/
+docker compose -f docker/docker-compose.yml run --rm builder
 ```
 
 ## Usage
 
-1. **Select Folder**: Click "Select Folder" to choose the root directory you want to scan
-2. **Scan**: Click "Scan for Cleanable Items" to recursively search for cleanable artifacts
-3. **Review**: Review the found items in the list, showing path, type, and size
-4. **Select**: Check the items you want to delete
-5. **Clean**: Click "Clean Selected Items" and confirm the deletion
+### GUI
 
-## Safety Features
+1. **Select Folder**: Click "Select Folder" or drag a folder onto the window
+2. **Scan**: Click "Scan" to find cleanable items (progress bar shows scan activity)
+3. **Review**: Items appear in a sortable table with path, type, size, file count, and modification date
+4. **Filter**: Use the search box or category dropdown to narrow results
+5. **Select**: Click the checkbox column to select items, or use Select All/None
+6. **Dry Run**: Preview what would be deleted before committing
+7. **Clean**: Click "Clean" and confirm — items go to Trash by default
+8. **Export**: Save results to CSV or JSON for reporting
 
-- **Preview before deletion**: Always shows what will be deleted before taking action
-- **Confirmation dialog**: Requires explicit confirmation before deleting files
-- **Selective deletion**: Choose exactly which items to delete
-- **Size calculation**: Shows how much space each item takes up
-
-## Supported Platforms
-
-- macOS
-- Windows
-- Linux
-
-## CI/CD and Automated Builds
-
-This project uses GitHub Actions for continuous integration and automated releases across multiple platforms.
-
-### Continuous Integration
-
-The CI workflow automatically runs on:
-- **Push to main/develop branches**: Validates builds across all supported platforms
-- **Pull requests**: Ensures code quality and cross-platform compatibility
-
-**Build Matrix**: The CI system tests builds for:
-- **Linux**: amd64, 386, arm64
-- **Windows**: amd64, 386  
-- **macOS**: amd64 (Intel), arm64 (Apple Silicon)
-
-**Build Status**: 
-- ✅ All platforms are automatically tested on every push and pull request
-- 🔄 Build status is visible via the CI badge above
-- 📊 Detailed build logs available in the [Actions tab](https://github.com/USERNAME/REPOSITORY/actions)
-
-**Quality Checks**:
-- Code formatting verification (`go fmt`)
-- Dependency verification (`go mod tidy`)
-- Test execution with race detection
-- Cross-platform build validation
-
-### Automated Releases
-
-Releases are automatically created when you push a git tag:
+### CLI
 
 ```bash
-# Create and push a new release
+universal-cleaner --path /path/to/project --dry-run
+universal-cleaner --path /path/to/project --yes
+universal-cleaner --path . --include-risky --no-trash --verbose
+```
+
+**CLI Flags**:
+- `--path`: Directory to scan (default: current directory)
+- `--dry-run`: Show what would be deleted without deleting
+- `--yes`: Skip confirmation prompts
+- `--verbose`: Show detailed output
+- `--include-risky`: Include risky targets (Cargo.lock, vendor, IDE configs)
+- `--no-trash`: Delete permanently instead of moving to Trash
+
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| `Cmd/Ctrl + R` | Rescan current folder |
+| `Cmd/Ctrl + F` | Focus the search/filter box |
+
+## Project Structure
+
+```
+universal-cleaner/
+├── main.go              # GUI entry point and layout
+├── cli.go               # CLI entry point
+├── theme.go             # Custom Fyne theme
+├── ui_table.go          # Results table widget
+├── ui_settings.go       # Settings dialog
+├── resource.go          # Bundled app icon (auto-generated)
+├── Icon.png             # App icon source
+├── internal/
+│   └── core/
+│       ├── types.go     # Shared types (CleanableItem, Settings, etc.)
+│       ├── targets.go   # Category definitions and target matching
+│       ├── scanner.go   # Filesystem scanner with parallel sizing
+│       ├── matcher.go   # Name/wildcard matching logic
+│       ├── size.go      # Size calculation and formatting
+│       ├── trash.go     # Cross-platform trash (macOS/Linux/Windows)
+│       ├── disk.go      # Disk usage (cross-platform)
+│       ├── git.go       # Git-awareness helpers
+│       ├── open.go      # Reveal in Finder/Explorer
+│       ├── export.go    # CSV/JSON export
+│       └── settings.go  # Settings persistence
+├── docker/
+│   ├── Dockerfile       # Linux build environment
+│   └── docker-compose.yml
+├── .github/workflows/
+│   ├── ci.yml           # CI: build + test on all platforms
+│   └── release.yml      # Release: native installers on tag push
+├── Makefile             # Build/package targets
+├── startup.sh           # Build + run script
+└── stop.sh              # Stop running instance
+```
+
+## Releasing
+
+Releases are triggered by pushing a git tag:
+
+```bash
 git tag v1.0.0
 git push origin v1.0.0
 ```
 
-**Release Process**:
-1. **Multi-platform builds**: Automatically builds binaries for all supported platforms
-2. **Checksum generation**: Creates SHA256 checksums for security verification
-3. **GitHub release**: Creates a release with all binaries and checksums
-4. **Release notes**: Auto-generates changelog from commit messages
-
-**Binary Naming Convention**:
-- `universal-cleaner-linux-amd64`
-- `universal-cleaner-windows-amd64.exe`
-- `universal-cleaner-darwin-arm64`
-
-### Manual Building for Different Platforms
-
-For local development and testing:
-
-### macOS
-```bash
-go build -o universal-cleaner-macos
-```
-
-### Windows (cross-compile from macOS/Linux)
-```bash
-GOOS=windows GOARCH=amd64 go build -o universal-cleaner-windows.exe
-```
-
-### Linux (cross-compile from macOS/Windows)
-```bash
-GOOS=linux GOARCH=amd64 go build -o universal-cleaner-linux
-```
-
-### Using the Makefile
-
-The project includes a Makefile for common build tasks:
-
-```bash
-# Install dependencies
-make deps
-
-# Build for current platform
-make build
-
-# Build for all platforms
-make build-all
-
-# Run tests
-make test
-
-# Clean build artifacts
-make clean
-```
-
-### Troubleshooting CI/CD Issues
-
-**Common Build Issues**:
-
-1. **Go Version Mismatch**
-   - Ensure your local Go version matches the CI version (1.23.4+)
-   - Update go.mod if you need a different Go version
-
-2. **Dependency Issues**
-   - Run `go mod tidy` to clean up dependencies
-   - Clear module cache: `go clean -modcache`
-
-3. **Cross-compilation Failures**
-   - Verify CGO is disabled for cross-compilation: `CGO_ENABLED=0`
-   - Check for platform-specific code that might not compile
-
-4. **Test Failures**
-   - Run tests locally: `go test -v -race ./...`
-   - Check for race conditions or platform-specific test issues
-
-5. **Release Workflow Issues**
-   - Ensure tag follows semantic versioning (v1.0.0, v1.2.3)
-   - Check repository permissions for release creation
-   - Verify GITHUB_TOKEN has sufficient permissions
-
-**Debugging Steps**:
-1. Check the Actions tab in GitHub for detailed logs
-2. Run the same commands locally to reproduce issues
-3. Verify all required files are committed and pushed
-4. Check for any platform-specific dependencies or code
-
-### Build Monitoring and Notifications
-
-**Status Monitoring**:
-- **CI Badge**: Shows current build status for the main branch
-- **Release Badge**: Indicates the status of the latest release workflow
-- **Go Version Badge**: Displays the Go version used in the project
-- **Latest Release Badge**: Shows the most recent release version
-
-**Workflow Notifications**:
-- GitHub automatically sends email notifications for failed workflows to repository maintainers
-- You can customize notification settings in your GitHub account preferences
-- Consider setting up additional monitoring for production releases
-
-**Supported Platforms Documentation**:
-
-| Platform | Architecture | Status | Binary Name |
-|----------|-------------|--------|-------------|
-| Linux | amd64 | ✅ Supported | `universal-cleaner-linux-amd64` |
-| Linux | 386 | ✅ Supported | `universal-cleaner-linux-386` |
-| Linux | arm64 | ✅ Supported | `universal-cleaner-linux-arm64` |
-| Windows | amd64 | ✅ Supported | `universal-cleaner-windows-amd64.exe` |
-| Windows | 386 | ✅ Supported | `universal-cleaner-windows-386.exe` |
-| macOS | amd64 (Intel) | ✅ Supported | `universal-cleaner-darwin-amd64` |
-| macOS | arm64 (Apple Silicon) | ✅ Supported | `universal-cleaner-darwin-arm64` |
-
-**Release Verification**:
-- All releases include SHA256 checksums for security verification
-- Download `checksums.txt` alongside binaries to verify integrity
-- Example verification: `sha256sum -c checksums.txt`
+The GitHub Actions release workflow will:
+1. Build native installers on macOS, Windows, and Linux runners
+2. Generate SHA256 checksums
+3. Create a GitHub Release with all artifacts attached
 
 ## Contributing
 
