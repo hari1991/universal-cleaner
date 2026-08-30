@@ -16,12 +16,19 @@ jobs:
   package-macos:
     runs-on: macos-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
+          # macos-latest is Apple Silicon (arm64); amd64 is cross-compiled.
+          # clang on macOS targets the requested arch via GOARCH, but only
+          # when CGO_ENABLED=1 (CGO is disabled by default when cross-compiling,
+          # which excludes all go-gl files and breaks the Fyne build).
           - goarch: amd64
             suffix: x86_64
+            cc: clang
           - goarch: arm64
             suffix: arm64
+            cc: clang
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -30,6 +37,20 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.23.4'
+
+      - name: Determine release version
+        shell: bash
+        run: |
+          set -e
+          RAW="$(tr -d '[:space:]' < VERSION)"
+          # Strip any pre-release suffix (e.g. -SNAPSHOT) -> x.y.z
+          APP_VERSION="${RAW%%-*}"
+          if ! printf '%s' "$APP_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Invalid version '$APP_VERSION' (from VERSION='$RAW'). Expected x.y.z[-SNAPSHOT]."
+            exit 1
+          fi
+          echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
+          echo "Release version: $APP_VERSION (from VERSION='$RAW')"
 
       - name: Install fyne CLI
         run: go install fyne.io/fyne/v2/cmd/fyne@latest
@@ -48,14 +69,18 @@ jobs:
       - name: Build raw binary
         env:
           GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 1
+          CC: ${{ matrix.cc }}
         run: go build -ldflags="-s -w" -o universal-cleaner .
 
       - name: Package macOS .app + .dmg
         env:
           GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 1
+          CC: ${{ matrix.cc }}
         run: |
           fyne package -os darwin -icon Icon.png -name "UniversalCleaner" \
-            -appVersion "${{ github.ref_name }}" -appID "com.universalcleaner.app"
+            -appVersion "${{ env.APP_VERSION }}" -appID "com.universalcleaner.app"
 
       - name: Rename output for arch
         run: |
@@ -86,12 +111,17 @@ jobs:
   package-windows:
     runs-on: windows-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
+          # windows-latest is amd64; 386 is cross-compiled with the 32-bit
+          # mingw toolchain (i686-w64-mingw32-gcc) and CGO_ENABLED=1.
           - goarch: amd64
             suffix: x86_64
+            cc: gcc
           - goarch: 386
             suffix: x86
+            cc: i686-w64-mingw32-gcc
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -101,8 +131,34 @@ jobs:
         with:
           go-version: '1.23.4'
 
+      - name: Determine release version
+        shell: bash
+        run: |
+          set -e
+          RAW="$(tr -d '[:space:]' < VERSION)"
+          APP_VERSION="${RAW%%-*}"
+          if ! printf '%s' "$APP_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Invalid version '$APP_VERSION' (from VERSION='$RAW'). Expected x.y.z[-SNAPSHOT]."
+            exit 1
+          fi
+          echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
+          echo "Release version: $APP_VERSION (from VERSION='$RAW')"
+
       - name: Install fyne CLI
         run: go install fyne.io/fyne/v2/cmd/fyne@latest
+
+      - name: Install mingw toolchain (Windows 386 cross)
+        if: matrix.goarch == '386'
+        shell: bash
+        run: |
+          # msys2 is preinstalled on windows-latest; add the 32-bit mingw gcc
+          /c/msys64/usr/bin/pacman.exe -S --noconfirm mingw-w64-i686-gcc || true
+          echo "C:\msys64\mingw32\bin" >> "$GITHUB_PATH"
+
+      - name: Ensure mingw64 in PATH (Windows amd64)
+        if: matrix.goarch == 'amd64'
+        shell: bash
+        run: echo "C:\msys64\mingw64\bin" >> "$GITHUB_PATH"
 
       - name: Cache Go modules
         uses: actions/cache@v4
@@ -116,16 +172,22 @@ jobs:
         run: go mod download
 
       - name: Build raw binary
+        shell: bash
         env:
           GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 1
+          CC: ${{ matrix.cc }}
         run: go build -ldflags="-s -w" -o universal-cleaner.exe .
 
       - name: Package Windows .msi
+        shell: bash
         env:
           GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 1
+          CC: ${{ matrix.cc }}
         run: |
-          fyne package -os windows -icon Icon.png -name "UniversalCleaner" `
-            -appVersion "${{ github.ref_name }}" -appID "com.universalcleaner.app"
+          fyne package -os windows -icon Icon.png -name "UniversalCleaner" \
+            -appVersion "${{ env.APP_VERSION }}" -appID "com.universalcleaner.app"
 
       - name: Organize artifacts
         shell: pwsh
@@ -159,12 +221,19 @@ jobs:
   package-linux:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
+          # ubuntu-latest is amd64; arm64 is cross-compiled with
+          # aarch64-linux-gnu-gcc + arm64 multiarch libs and CGO_ENABLED=1.
           - goarch: amd64
             suffix: x86_64
+            cc: gcc
+            pclibdir: ""
           - goarch: arm64
             suffix: arm64
+            cc: aarch64-linux-gnu-gcc
+            pclibdir: "/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -174,11 +243,48 @@ jobs:
         with:
           go-version: '1.23.4'
 
-      - name: Install Linux GUI dependencies
+      - name: Determine release version
+        shell: bash
+        run: |
+          set -e
+          RAW="$(tr -d '[:space:]' < VERSION)"
+          APP_VERSION="${RAW%%-*}"
+          if ! printf '%s' "$APP_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Invalid version '$APP_VERSION' (from VERSION='$RAW'). Expected x.y.z[-SNAPSHOT]."
+            exit 1
+          fi
+          echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
+          echo "Release version: $APP_VERSION (from VERSION='$RAW')"
+
+      - name: Install Linux GUI dependencies (amd64 native)
+        if: matrix.goarch == 'amd64'
         run: |
           sudo apt-get update
           sudo apt-get install -y libgl1-mesa-dev xorg-dev gcc pkg-config \
             libegl1-mesa-dev libgles2-mesa-dev
+
+      - name: Install Linux GUI dependencies (arm64 cross)
+        if: matrix.goarch == 'arm64'
+        run: |
+          sudo dpkg --add-architecture arm64
+          # Ubuntu 24.04 uses deb822 sources; restrict the default sources to
+          # amd64 and add arm64 from ports.ubuntu.com.
+          sudo sed -i '/^Architectures:/d; /^Types:/a Architectures: amd64' \
+            /etc/apt/sources.list.d/ubuntu.sources
+          sudo tee /etc/apt/sources.list.d/arm64.sources >/dev/null <<'EOF'
+          Types: deb
+          URIs: http://ports.ubuntu.com/ubuntu-ports
+          Suites: noble noble-updates noble-security
+          Components: main universe
+          Architectures: arm64
+          Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+          EOF
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            libgl1-mesa-dev:arm64 \
+            libx11-dev:arm64 libxrandr-dev:arm64 libxi-dev:arm64 \
+            libxxf86vm-dev:arm64 libxcursor-dev:arm64 libxinerama-dev:arm64
 
       - name: Install fyne CLI
         run: go install fyne.io/fyne/v2/cmd/fyne@latest
@@ -197,14 +303,20 @@ jobs:
       - name: Build raw binary
         env:
           GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 1
+          CC: ${{ matrix.cc }}
+          PKG_CONFIG_LIBDIR: ${{ matrix.pclibdir }}
         run: go build -ldflags="-s -w" -o universal-cleaner .
 
       - name: Package Linux .tar.xz + .deb
         env:
           GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 1
+          CC: ${{ matrix.cc }}
+          PKG_CONFIG_LIBDIR: ${{ matrix.pclibdir }}
         run: |
           fyne package -os linux -icon Icon.png -name "universal-cleaner" \
-            -appVersion "${{ github.ref_name }}" -appID "com.universalcleaner.app"
+            -appVersion "${{ env.APP_VERSION }}" -appID "com.universalcleaner.app"
 
       - name: Organize artifacts
         run: |
@@ -245,6 +357,19 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Determine release version
+        shell: bash
+        run: |
+          set -e
+          RAW="$(tr -d '[:space:]' < VERSION)"
+          APP_VERSION="${RAW%%-*}"
+          if ! printf '%s' "$APP_VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Invalid version '$APP_VERSION' (from VERSION='$RAW'). Expected x.y.z[-SNAPSHOT]."
+            exit 1
+          fi
+          echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
+          echo "Release version: $APP_VERSION (from VERSION='$RAW')"
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -259,7 +384,7 @@ jobs:
           done
           # Create consolidated checksums
           cd dist
-          echo "SHA256 checksums for Universal Cleaner $(basename ${{ github.ref_name }})" > checksums.txt
+          echo "SHA256 checksums for Universal Cleaner ${{ env.APP_VERSION }}" > checksums.txt
           echo "" >> checksums.txt
           for f in *.dmg *.msi *.tar.xz *.deb *.app.zip; do
             [ -f "$f" ] && sha256sum "$f" >> checksums.txt
@@ -271,7 +396,7 @@ jobs:
       - name: Generate release notes
         run: |
           PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
-          CURRENT_TAG=${GITHUB_REF#refs/tags/}
+          CURRENT_TAG="v${{ env.APP_VERSION }}"
 
           {
             echo "## Universal Cleaner ${CURRENT_TAG}"
@@ -323,7 +448,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: Universal Cleaner ${{ github.ref_name }}
+          tag_name: v${{ env.APP_VERSION }}
+          name: Universal Cleaner v${{ env.APP_VERSION }}
           body_path: release_notes.md
           draft: false
           prerelease: false
