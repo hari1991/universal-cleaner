@@ -1,0 +1,12 @@
+# Use LF line endings on all platforms so gofmt checks are consistent
+# (Windows checkouts would otherwise get CRLF and fail gofmt).
+* text=auto eol=lf
+
+# Ensure Go sources are always LF
+*.go   text eol=lf
+*.sum  text eol=lf
+*.mod  text eol=lf
+
+# Binary files
+*.png  binary
+*.ico  binary

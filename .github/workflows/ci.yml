@@ -13,16 +13,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux: native runner, install graphics deps via apt
-          - { runs_on: ubuntu-latest, goos: linux,   goarch: amd64, cc: gcc,                    label: linux-amd64 }
-          - { runs_on: ubuntu-latest, goos: linux,   goarch: 386,   cc: "gcc -m32",              label: linux-386 }
-          - { runs_on: ubuntu-latest, goos: linux,   goarch: arm64, cc: aarch64-linux-gnu-gcc,   label: linux-arm64 }
-          # Windows: native runner, mingw provides OpenGL/GLFW toolchain
-          - { runs_on: windows-latest, goos: windows, goarch: amd64, cc: gcc,                   label: windows-amd64 }
-          - { runs_on: windows-latest, goos: windows, goarch: 386,   cc: i686-w64-mingw32-gcc,   label: windows-386 }
+          # Linux: native amd64 runner, install graphics deps via apt
+          - { runs_on: ubuntu-latest, goos: linux,   goarch: amd64, cc: gcc,                  label: linux-amd64,   pclibdir: "" }
+          # Linux 386: cross-compile on amd64 with gcc -m32 and i386 multiarch libs
+          - { runs_on: ubuntu-latest, goos: linux,   goarch: 386,   cc: "gcc -m32",            label: linux-386,     pclibdir: "/usr/lib/i386-linux-gnu/pkgconfig:/usr/share/pkgconfig" }
+          # Linux arm64: cross-compile on amd64 using ports.ubuntu.com arm64 libs
+          - { runs_on: ubuntu-latest, goos: linux,   goarch: arm64, cc: aarch64-linux-gnu-gcc, label: linux-arm64,   pclibdir: "/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig" }
+          # Windows: native runner, mingw provides the OpenGL/GLFW toolchain
+          - { runs_on: windows-latest, goos: windows, goarch: amd64, cc: gcc,                  label: windows-amd64, pclibdir: "" }
+          - { runs_on: windows-latest, goos: windows, goarch: 386,   cc: i686-w64-mingw32-gcc,  label: windows-386,   pclibdir: "" }
           # macOS: native runner, OpenGL framework + Cocoa built in
-          - { runs_on: macos-latest,   goos: darwin,  goarch: amd64, cc: clang,                  label: darwin-amd64 }
-          - { runs_on: macos-latest,   goos: darwin,  goarch: arm64, cc: clang,                  label: darwin-arm64 }
+          - { runs_on: macos-latest,   goos: darwin,  goarch: amd64, cc: clang,                 label: darwin-amd64,  pclibdir: "" }
+          - { runs_on: macos-latest,   goos: darwin,  goarch: arm64, cc: clang,                 label: darwin-arm64,  pclibdir: "" }
 
     steps:
     - name: Checkout code
@@ -38,7 +40,9 @@ jobs:
       if: runner.os == 'Linux' && matrix.goarch == 'amd64'
       run: |
         sudo apt-get update
-        sudo apt-get install -y libgl1-mesa-dev libglfw3-dev xorg-dev
+        # go-gl/glfw compiles GLFW from vendored source, so libglfw3-dev is NOT needed;
+        # we only need OpenGL (libGL) and the X11 dev libraries.
+        sudo apt-get install -y libgl1-mesa-dev xorg-dev
 
     - name: Install graphics deps (Linux 386 cross)
       if: runner.os == 'Linux' && matrix.goarch == '386'
@@ -47,7 +51,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y \
           gcc-multilib g++-multilib \
-          libgl1-mesa-dev:i386 libglfw3-dev:i386 \
+          libgl1-mesa-dev:i386 \
           libx11-dev:i386 libxrandr-dev:i386 libxi-dev:i386 \
           libxxf86vm-dev:i386 libxcursor-dev:i386 libxinerama-dev:i386
 
@@ -55,10 +59,22 @@ jobs:
       if: runner.os == 'Linux' && matrix.goarch == 'arm64'
       run: |
         sudo dpkg --add-architecture arm64
+        # Ubuntu 24.04 uses deb822 sources; restrict the default sources to amd64
+        # and add arm64 from ports.ubuntu.com.
+        sudo sed -i '/^Architectures:/d; /^Types:/a Architectures: amd64' \
+          /etc/apt/sources.list.d/ubuntu.sources
+        sudo tee /etc/apt/sources.list.d/arm64.sources >/dev/null <<'EOF'
+        Types: deb
+        URIs: http://ports.ubuntu.com/ubuntu-ports
+        Suites: noble noble-updates noble-security
+        Components: main universe
+        Architectures: arm64
+        Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+        EOF
         sudo apt-get update
         sudo apt-get install -y \
           gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
-          libgl1-mesa-dev:arm64 libglfw3-dev:arm64 \
+          libgl1-mesa-dev:arm64 \
           libx11-dev:arm64 libxrandr-dev:arm64 libxi-dev:arm64 \
           libxxf86vm-dev:arm64 libxcursor-dev:arm64 libxinerama-dev:arm64
 
@@ -110,6 +126,10 @@ jobs:
         CC: ${{ matrix.cc }}
       run: |
         echo "Building for $GOOS/$GOARCH with CC=$CC"
+        if [ -n "${{ matrix.pclibdir }}" ]; then
+          export PKG_CONFIG_LIBDIR="${{ matrix.pclibdir }}"
+          echo "PKG_CONFIG_LIBDIR=$PKG_CONFIG_LIBDIR"
+        fi
         OUT="${{ runner.temp }}/universal-cleaner"
         if [ "$GOOS" = "windows" ]; then OUT="$OUT.exe"; fi
         go build -v -o "$OUT" .
