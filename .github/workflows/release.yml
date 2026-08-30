@@ -245,7 +245,7 @@ jobs:
           if (-not $found) {
             Write-Error "No Windows artifacts were produced by fyne package or go build"
             exit 1
-          fi
+          }
 
       - name: Generate SHA256 checksum
         shell: pwsh
